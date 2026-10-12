@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8">
+    <title>Zprávy pro diváky</title>
+</head>
+<body>
+<div id="ZpravyDivakumPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox,emby-select,emby-textarea">
+    <div data-role="content">
+        <div class="content-primary">
+
+            <div class="verticalSection">
+                <h2 class="sectionTitle">Zprávy pro diváky</h2>
+            </div>
+
+            <!-- Připojení diváci -->
+            <div class="verticalSection">
+                <h3 class="sectionTitle">Kdo je připojený</h3>
+                <div id="Sessions" class="fieldDescription">Načítám…</div>
+                <button is="emby-button" type="button" id="Reload" class="raised button-alt"><span>Obnovit</span></button>
+            </div>
+
+            <!-- Zpráva -->
+            <div class="verticalSection">
+                <h3 class="sectionTitle">Poslat zprávu</h3>
+                <div class="inputContainer"><input is="emby-input" type="text" id="MsgHeader" label="Nadpis"></div>
+                <div class="inputContainer"><textarea is="emby-textarea" id="MsgText" label="Text zprávy" rows="3"></textarea></div>
+                <div class="selectContainer">
+                    <select is="emby-select" id="MsgAudience" label="Komu">
+                        <option value="All">Všem připojeným</option>
+                        <option value="Watching">Jen těm, kdo právě něco přehrávají</option>
+                        <option value="Selected">Jen zaškrtnutým výše</option>
+                    </select>
+                </div>
+                <div class="inputContainer"><input is="emby-input" type="number" id="MsgSeconds" min="2" max="120" label="Jak dlouho zobrazit (s)"></div>
+                <button is="emby-button" type="button" id="Send" class="raised button-submit block"><span>Poslat zprávu</span></button>
+                <div id="SendResult" class="fieldDescription"></div>
+            </div>
+
+            <!-- Restart -->
+            <div class="verticalSection">
+                <h3 class="sectionTitle">Restart s odpočtem</h3>
+                <div id="CdStatus" class="fieldDescription">Žádný odpočet neběží.</div>
+                <div class="inputContainer"><input is="emby-input" type="number" id="CdMinutes" min="0.1" max="120" step="0.5" label="Restartovat za (minut)"></div>
+                <div class="checkboxContainer">
+                    <label><input is="emby-checkbox" type="checkbox" id="CdOnlyAnnounce"><span>Jen vyzkoušet odpočet (nerestartovat)</span></label>
+                </div>
+                <button is="emby-button" type="button" id="CdStart" class="raised button-submit block"><span>Spustit odpočet a restartovat</span></button>
+                <button is="emby-button" type="button" id="CdCancel" class="raised button-cancel block"><span>Zrušit odpočet</span></button>
+                <div class="fieldDescription">Restart s odpočtem jde naplánovat i v <i>Naplánovaných úlohách → Zprávy pro diváky</i>.</div>
+            </div>
+
+            <!-- Nastavení -->
+            <form id="ZpravyDivakumForm">
+                <div class="verticalSection">
+                    <h3 class="sectionTitle">Nastavení</h3>
+                    <div class="inputContainer"><input is="emby-input" type="text" id="DefaultHeader" label="Výchozí nadpis zprávy"></div>
+                    <div class="inputContainer"><input is="emby-input" type="number" id="MessageSeconds" min="2" max="120" label="Výchozí doba zobrazení (s)"></div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="CountdownSteps" label="Kroky odpočtu (sekundy)">
+                        <div class="fieldDescription">Kdy se má ozvat upozornění, např. <code>180,120,60,30,20,10</code>.</div>
+                    </div>
+                    <div class="inputContainer"><input is="emby-input" type="text" id="CountdownHeader" label="Nadpis odpočtu"></div>
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="CountdownText" label="Text odpočtu">
+                        <div class="fieldDescription"><code>{cas}</code> se nahradí zbývajícím časem („3 minuty“, „30 sekund“).</div>
+                    </div>
+                    <div class="inputContainer"><input is="emby-input" type="text" id="CancelText" label="Text při zrušení"></div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label><input is="emby-checkbox" type="checkbox" id="SkipCountdownWhenIdle"><span>Když nikdo nic nepřehrává, restartovat hned</span></label>
+                    </div>
+                    <div class="inputContainer"><input is="emby-input" type="number" id="ActiveWithinSeconds" min="60" max="86400" label="Za připojené počítat klienty aktivní v posledních (s)"></div>
+                    <button is="emby-button" type="submit" class="raised button-submit block"><span>Uložit nastavení</span></button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <script type="text/javascript">
+        (function () {
+            var pluginId = '0f48fa7b-83f3-41ad-8114-70864ed7ae01';
+            var page = document.querySelector('#ZpravyDivakumPage');
+            var text = ['DefaultHeader', 'CountdownSteps', 'CountdownHeader', 'CountdownText', 'CancelText'];
+            var num = ['MessageSeconds', 'ActiveWithinSeconds'];
+            var bool = ['SkipCountdownWhenIdle'];
+            var timer = null;
+            function el(id) { return page.querySelector('#' + id); }
+            function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+            function api(method, path, body) {
+                return ApiClient.ajax({
+                    type: method, url: ApiClient.getUrl(path), dataType: 'json',
+                    contentType: 'application/json', data: body ? JSON.stringify(body) : undefined
+                });
+            }
+
+            function loadSessions() {
+                api('GET', 'ZpravyDivakum/Sessions').then(function (list) {
+                    if (!list.length) { el('Sessions').textContent = 'Nikdo není připojený.'; return; }
+                    el('Sessions').innerHTML = list.map(function (s) {
+                        return '<label style="display:block;margin:.3em 0"><input type="checkbox" class="sess" value="' + esc(s.Id) + '"> <b>' + esc(s.UserName) + '</b> – '
+                            + esc(s.Client) + ' (' + esc(s.DeviceName) + ')' + (s.NowPlaying ? ' ▶ ' + esc(s.NowPlaying) : '') + '</label>';
+                    }).join('');
+                });
+            }
+
+            function showStatus(st) {
+                if (!st.Running) { el('CdStatus').textContent = 'Žádný odpočet neběží.'; return; }
+                var m = Math.floor(st.SecondsLeft / 60), s = st.SecondsLeft % 60;
+                el('CdStatus').innerHTML = '<b>' + (st.Restart ? 'Restart' : 'Zkušební odpočet') + ' za ' + m + ':' + (s < 10 ? '0' : '') + s + '</b>'
+                    + (st.StartedBy ? ' (spustil ' + esc(st.StartedBy) + ')' : '');
+            }
+
+            function poll() { api('GET', 'ZpravyDivakum/Countdown').then(showStatus); }
+
+            page.addEventListener('pageshow', function () {
+                ApiClient.getPluginConfiguration(pluginId).then(function (c) {
+                    text.forEach(function (k) { el(k).value = c[k] || ''; });
+                    num.forEach(function (k) { el(k).value = c[k]; });
+                    bool.forEach(function (k) { el(k).checked = !!c[k]; });
+                    el('MsgHeader').value = c.DefaultHeader || '';
+                    el('MsgSeconds').value = c.MessageSeconds;
+                    var steps = (c.CountdownSteps || '180').split(/[,; ]+/).map(Number).filter(Boolean);
+                    el('CdMinutes').value = Math.max.apply(null, steps) / 60;
+                });
+                loadSessions(); poll();
+                timer = setInterval(poll, 1000);
+            });
+            page.addEventListener('pagehide', function () { if (timer) clearInterval(timer); });
+
+            el('Reload').addEventListener('click', loadSessions);
+
+            el('Send').addEventListener('click', function () {
+                var ids = Array.prototype.map.call(page.querySelectorAll('.sess:checked'), function (c) { return c.value; });
+                if (!el('MsgText').value.trim()) { el('SendResult').textContent = 'Napiš text zprávy.'; return; }
+                api('POST', 'ZpravyDivakum/Send', {
+                    Header: el('MsgHeader').value, Text: el('MsgText').value,
+                    Seconds: parseInt(el('MsgSeconds').value, 10) || null,
+                    Audience: el('MsgAudience').value, SessionIds: ids
+                }).then(function (r) { el('SendResult').textContent = 'Odesláno na ' + r.sent + ' zařízení.'; },
+                        function () { el('SendResult').textContent = 'Odeslání selhalo.'; });
+            });
+
+            el('CdStart').addEventListener('click', function () {
+                var restart = !el('CdOnlyAnnounce').checked;
+                if (restart && !confirm('Opravdu restartovat server? Všem divákům se přeruší přehrávání.')) { return; }
+                var sec = Math.round(parseFloat(el('CdMinutes').value) * 60) || null;
+                api('POST', 'ZpravyDivakum/Countdown', { Seconds: sec, Restart: restart }).then(showStatus,
+                    function () { Dashboard.alert('Odpočet už běží.'); });
+            });
+
+            el('CdCancel').addEventListener('click', function () {
+                api('DELETE', 'ZpravyDivakum/Countdown').then(poll);
+            });
+
+            el('ZpravyDivakumForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                ApiClient.getPluginConfiguration(pluginId).then(function (c) {
+                    text.forEach(function (k) { c[k] = el(k).value; });
+                    num.forEach(function (k) { c[k] = parseInt(el(k).value, 10) || 0; });
+                    bool.forEach(function (k) { c[k] = el(k).checked; });
+                    ApiClient.updatePluginConfiguration(pluginId, c).then(Dashboard.processPluginConfigurationUpdateResult);
+                });
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>
